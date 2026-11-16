@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'firebase_options.dart';
+import 'screens/login_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,12 +19,32 @@ Future<void> main() async {
 
 class TriviaShowdownApp extends StatelessWidget {
   const TriviaShowdownApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'API-to-Cloud Trivia Showdown',
+      title: 'Cloud Trivia Showdown',
       theme: ThemeData(primarySwatch: Colors.deepOrange),
-      home: const TriviaShowdownScreen(),
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return const Scaffold(
+              body: Center(child: Text('Authentication unavailable.')),
+            );
+          }
+
+          return snapshot.hasData
+              ? const TriviaShowdownScreen()
+              : const LoginScreen();
+        },
+      ),
     );
   }
 }
@@ -181,7 +204,18 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Cloud Trivia Showdown: API Edition')),
+      appBar: AppBar(
+        title: const Text('Cloud Trivia Showdown'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign Out',
+            onPressed: () async {
+              await FirebaseAuth.instance.signOut();
+            },
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: _isLoading
