@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:html_unescape/html_unescape.dart';
 
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
@@ -53,24 +54,67 @@ class Question {
   final String questionText;
   final String correctAnswer;
   final List<String> options;
+
   Question({
     required this.questionText,
     required this.correctAnswer,
     required this.options,
   });
+
   factory Question.fromJson(Map<String, dynamic> json) {
-    var incorrect = List<String>.from(json['incorrect_answers']);
-    var correct = json['correct_answer'] as String;
-    var allOptions = [...incorrect, correct];
+    final unescape = HtmlUnescape();
+
+    if (json['category'] != 'General Knowledge' ||
+        json['difficulty'] != 'easy' ||
+        json['type'] != 'multiple') {
+      throw const FormatException('Invalid question metadata.');
+    }
+
+    if (json['question'] is! String || json['correct_answer'] is! String) {
+      throw const FormatException('Missing question or correct answer.');
+    }
+
+    final questionText = unescape.convert(json['question'] as String).trim();
+    final correct = unescape.convert(json['correct_answer'] as String).trim();
+
+    if (questionText.isEmpty || correct.isEmpty) {
+      throw const FormatException('Question or correct answer is blank.');
+    }
+
+    final rawIncorrect = json['incorrect_answers'];
+
+    if (rawIncorrect is! List || rawIncorrect.length != 3) {
+      throw const FormatException('Expected three incorrect answers.');
+    }
+
+    final incorrect = <String>[];
+
+    for (final answer in rawIncorrect) {
+      if (answer is! String) {
+        throw const FormatException('Invalid answer type.');
+      }
+
+      final cleaned = unescape.convert(answer).trim();
+
+      if (cleaned.isEmpty) {
+        throw const FormatException('Blank answer.');
+      }
+
+      incorrect.add(cleaned);
+    }
+
+    final allOptions = [...incorrect, correct];
+
+    if (allOptions.toSet().length != 4) {
+      throw const FormatException('Duplicate answer choices.');
+    }
+
     allOptions.shuffle();
-    String clean(String val) => val
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#039;', "'")
-        .replaceAll('&amp;', '&');
+
     return Question(
-      questionText: clean(json['question']),
-      correctAnswer: clean(correct),
-      options: allOptions.map(clean).toList(),
+      questionText: questionText,
+      correctAnswer: correct,
+      options: allOptions,
     );
   }
 }
@@ -102,33 +146,36 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
     final roundId = _roundId;
     try {
       final uri = Uri.parse(
-        'https://opentdb.com/api.php?amount=5&category=9&difficulty=easy&type=multiple',
+        'https://opentdb.com/api.php?amount=10&category=9&difficulty=easy&type=multiple',
       );
       final response = await http.get(uri).timeout(const Duration(seconds: 10));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['response_code'] == 0) {
-          final results = data['results'] as List;
-          if (!mounted || roundId != _roundId) return;
-          if (results.isEmpty) {
-            setState(() {
-              _error = 'No trivia questions were returned. Please try again.';
-              _isLoading = false;
-            });
-            return;
-          }
-          setState(() {
-            _questions = results.map((q) => Question.fromJson(q)).toList();
-            _isLoading = false;
-          });
-        } else {
-          if (!mounted || roundId != _roundId) return;
-          setState(() {
-            _error =
-                'Trivia API returned response code ${data['response_code']}. Please try again.';
-            _isLoading = false;
-          });
+
+        if (data is! Map<String, dynamic> ||
+            data['response_code'] != 0 ||
+            data['results'] is! List ||
+            (data['results'] as List).length != 10) {
+          throw const FormatException('Invalid trivia API response.');
         }
+
+        final results = data['results'] as List;
+
+        if (!mounted || roundId != _roundId) return;
+
+        final questions = results.map((q) {
+          if (q is! Map<String, dynamic>) {
+            throw const FormatException('Invalid question object.');
+          }
+          return Question.fromJson(q);
+        }).toList();
+
+        if (!mounted || roundId != _roundId) return;
+
+        setState(() {
+          _questions = questions;
+          _isLoading = false;
+        });
       } else {
         if (!mounted || roundId != _roundId) return;
         setState(() {
