@@ -5,9 +5,11 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:html_unescape/html_unescape.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
+import 'services/attempt_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -136,10 +138,23 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
   bool _isSyncing = false;
   int _roundId = 0;
   final List<String> _userAnswers = [];
+  final AttemptService _attemptService = AttemptService();
+  String? _firestoreRoundId;
+  String? _roundOwnerUid;
+  bool _isVerifying = false;
+  String _cloudMessage = '';
+  bool _saveUnknown = false;
+  bool _verificationUnavailable = false;
+  bool _injectLostAck = false;
 
   @override
   void initState() {
     super.initState();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      _roundOwnerUid = user.uid;
+      _firestoreRoundId = _attemptService.createRoundId(user.uid);
+    }
     _loadTriviaData();
   }
 
@@ -215,42 +230,208 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
         _answered = false;
         _selectedOption = null;
       } else {
-        _currentIndex++; // triggers results screen
+        _currentIndex++;
       }
     });
   }
 
   Future<void> _syncScoreToCloud() async {
-    if (_isSyncing || _isSynced) return;
-    final roundId = _roundId;
+    if (_isSyncing || _isVerifying || _isSynced) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = _roundOwnerUid;
+    final firestoreRoundId = _firestoreRoundId;
+    final localRoundId = _roundId;
+    final score = _score;
+
+    if (user == null ||
+        uid == null ||
+        user.uid != uid ||
+        firestoreRoundId == null) {
+      setState(() {
+        _cloudMessage = 'Authentication changed. Cannot submit this round.';
+      });
+      return;
+    }
+
+    bool stillCurrent() =>
+        mounted &&
+        localRoundId == _roundId &&
+        FirebaseAuth.instance.currentUser?.uid == uid;
+
     setState(() {
       _isSyncing = true;
+      _isVerifying = false;
+      _cloudMessage = 'Checking cloud submission...';
     });
-    await Future.delayed(const Duration(seconds: 1));
-    if (!mounted || roundId != _roundId) return;
-    setState(() {
-      _isSyncing = false;
-      _isSynced = true;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Simulated sync complete; no backend request was sent.'),
-      ),
-    );
+
+    try {
+      if (_saveUnknown || _verificationUnavailable) {
+        final ref = FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('attempts')
+            .doc(firestoreRoundId);
+
+        final snapshot = await ref.get(const GetOptions(source: Source.server));
+
+        if (!stillCurrent()) return;
+
+        if (snapshot.metadata.isFromCache ||
+            snapshot.metadata.hasPendingWrites) {
+          throw StateError('Server verification unavailable.');
+        }
+
+        if (snapshot.exists) {
+          final verified = await _attemptService.verifyAttempt(
+            uid: uid,
+            roundId: firestoreRoundId,
+            correctCount: score,
+          );
+
+          if (!stillCurrent()) return;
+
+          setState(() {
+            _isSyncing = false;
+            _isSynced = verified;
+            _saveUnknown = !verified;
+            _verificationUnavailable = !verified;
+            _cloudMessage = verified
+                ? 'Cloud verified!'
+                : 'Existing attempt does not match. Submission blocked.';
+          });
+          return;
+        }
+
+        setState(() {
+          _saveUnknown = false;
+          _verificationUnavailable = false;
+          _cloudMessage = 'Attempt not found. Retrying original submission...';
+        });
+      }
+
+      await _attemptService.submitAttempt(
+        uid: uid,
+        roundId: firestoreRoundId,
+        correctCount: _score,
+      );
+
+      if (_injectLostAck) {
+        _injectLostAck = false;
+
+        if (!mounted || localRoundId != _roundId) return;
+
+        setState(() {
+          _isSyncing = false;
+          _saveUnknown = true;
+          _cloudMessage =
+              'TEST: Save status unknown (acknowledgment deliberately hidden).';
+        });
+        return;
+      }
+
+      if (!stillCurrent()) return;
+
+      setState(() {
+        _isSyncing = false;
+        _isVerifying = true;
+        _cloudMessage = 'Verifying saved attempt on the server...';
+      });
+
+      final verified = await _attemptService.verifyAttempt(
+        uid: uid,
+        roundId: firestoreRoundId,
+        correctCount: score,
+      );
+
+      if (!stillCurrent()) return;
+
+      setState(() {
+        _isVerifying = false;
+        _isSynced = verified;
+        _verificationUnavailable = !verified;
+        _cloudMessage = verified
+            ? 'Cloud verified!'
+            : 'Server record did not match. Submission remains unresolved.';
+      });
+    } on FirebaseException catch (e) {
+      if (!stillCurrent()) return;
+
+      setState(() {
+        _isSyncing = false;
+        _isVerifying = false;
+
+        if (e.code == 'permission-denied') {
+          _cloudMessage = 'Permission denied.';
+        } else if (e.code == 'unauthenticated') {
+          _cloudMessage = 'Authentication required.';
+        } else if (e.code == 'resource-exhausted') {
+          _saveUnknown = true;
+          _cloudMessage = 'Firestore resource limit reached. Retry later.';
+        } else if (e.code == 'unavailable') {
+          _saveUnknown = true;
+          _cloudMessage = 'Firestore unavailable. Reconnect and retry.';
+        } else {
+          _saveUnknown = true;
+          _cloudMessage = 'Save status unknown. Retry to check the server.';
+        }
+      });
+    } on StateError catch (e) {
+      if (!stillCurrent()) return;
+
+      setState(() {
+        _isSyncing = false;
+        _isVerifying = false;
+        _cloudMessage = 'Attempt collision: $e';
+      });
+    } catch (e) {
+      if (!stillCurrent()) return;
+
+      setState(() {
+        _isSyncing = false;
+        _isVerifying = false;
+        _saveUnknown = true;
+        _cloudMessage = 'Save status unresolved: $e';
+      });
+    }
   }
 
   void _restart() {
+    if (_isSyncing ||
+        _isVerifying ||
+        _saveUnknown ||
+        _verificationUnavailable ||
+        !_isSynced) {
+      return;
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.uid != _roundOwnerUid) return;
+
     _roundId++;
+
     setState(() {
+      _roundOwnerUid = user.uid;
+      _firestoreRoundId = _attemptService.createRoundId(user.uid);
+
       _isLoading = true;
+      _error = '';
+      _questions = [];
       _currentIndex = 0;
       _score = 0;
       _answered = false;
       _selectedOption = null;
+
       _isSynced = false;
       _isSyncing = false;
+      _isVerifying = false;
+      _saveUnknown = false;
+      _verificationUnavailable = false;
+      _cloudMessage = '';
+
       _userAnswers.clear();
     });
+
     _loadTriviaData();
   }
 
@@ -263,9 +444,15 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Sign Out',
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-            },
+            onPressed:
+                (_isSyncing ||
+                    _isVerifying ||
+                    _saveUnknown ||
+                    _verificationUnavailable)
+                ? null
+                : () async {
+                    await FirebaseAuth.instance.signOut();
+                  },
           ),
         ],
       ),
@@ -359,26 +546,41 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
                           vertical: 12,
                         ),
                       ),
-                      onPressed: _isSyncing ? null : _syncScoreToCloud,
+                      onPressed: (_isSyncing || _isVerifying)
+                          ? null
+                          : _syncScoreToCloud,
                       icon: const Icon(Icons.cloud_upload),
                       label: Text(
                         _isSyncing
-                            ? 'Simulating sync...'
-                            : 'Simulate Score Sync',
+                            ? 'Submitting...'
+                            : _isVerifying
+                            ? 'Verifying...'
+                            : 'Submit to Cloud',
                       ),
                     )
                   else
                     const Text(
-                      '✓ Sync Simulation Complete',
+                      '✓ Cloud verified!',
                       style: TextStyle(
                         color: Colors.green,
                         fontWeight: FontWeight.bold,
                         fontSize: 16,
                       ),
                     ),
+
+                  if (_cloudMessage.isNotEmpty)
+                    Text(_cloudMessage, textAlign: TextAlign.center),
+
                   const SizedBox(height: 16),
                   TextButton(
-                    onPressed: _restart,
+                    onPressed:
+                        (_isSyncing ||
+                            _isVerifying ||
+                            _saveUnknown ||
+                            _verificationUnavailable ||
+                            !_isSynced)
+                        ? null
+                        : _restart,
                     child: const Text('Play Again'),
                   ),
                 ],
