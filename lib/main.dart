@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:html_unescape/html_unescape.dart';
 
 import 'firebase_options.dart';
@@ -136,6 +135,8 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
   bool _isSynced = false;
   bool _isSyncing = false;
   int _roundId = 0;
+  final List<String> _userAnswers = [];
+
   @override
   void initState() {
     super.initState();
@@ -194,9 +195,13 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
 
   void _answerQuestion(String option) {
     if (_answered) return;
+
     setState(() {
       _answered = true;
       _selectedOption = option;
+
+      _userAnswers.add(option);
+
       if (option == _questions[_currentIndex].correctAnswer) {
         _score++;
       }
@@ -244,6 +249,7 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
       _selectedOption = null;
       _isSynced = false;
       _isSyncing = false;
+      _userAnswers.clear();
     });
     _loadTriviaData();
   }
@@ -276,57 +282,106 @@ class _TriviaShowdownScreenState extends State<TriviaShowdownScreen> {
                 ),
               )
             : _currentIndex >= _questions.length
-            ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text(
-                      'Showdown Complete!',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'Final Score: $_score / ${_questions.length}',
-                      style: const TextStyle(fontSize: 18),
-                    ),
-                    const SizedBox(height: 24),
-                    if (!_isSynced)
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.deepOrange,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 24,
-                            vertical: 12,
+            ? Column(
+                children: [
+                  const Text(
+                    'Showdown Complete!',
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Final Score: $_score / ${_questions.length}',
+                    style: const TextStyle(fontSize: 18),
+                  ),
+                  const SizedBox(height: 24),
+
+                  const Text(
+                    'Answer Review',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 12),
+
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: _questions.length,
+                      itemBuilder: (context, index) {
+                        final question = _questions[index];
+                        final selected = _userAnswers[index];
+                        final isCorrect = selected == question.correctAnswer;
+
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${index + 1}. ${question.questionText}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'Your answer: $selected',
+                                  style: TextStyle(
+                                    color: isCorrect
+                                        ? Colors.green.shade700
+                                        : Colors.red.shade700,
+                                  ),
+                                ),
+                                if (!isCorrect)
+                                  Text(
+                                    'Correct answer: ${question.correctAnswer}',
+                                    style: TextStyle(
+                                      color: Colors.green.shade700,
+                                    ),
+                                  ),
+                                const SizedBox(height: 4),
+                                Text(isCorrect ? 'Correct ✓' : 'Incorrect ✗'),
+                              ],
+                            ),
                           ),
-                        ),
-                        onPressed: _isSyncing ? null : _syncScoreToCloud,
-                        icon: const Icon(Icons.cloud_upload),
-                        label: Text(
-                          _isSyncing
-                              ? 'Simulating sync...'
-                              : 'Simulate Score Sync',
-                        ),
-                      )
-                    else
-                      const Text(
-                        '✓ Sync Simulation Complete',
-                        style: TextStyle(
-                          color: Colors.green,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  if (!_isSynced)
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.deepOrange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
                         ),
                       ),
-                    const SizedBox(height: 16),
-                    TextButton(
-                      onPressed: _restart,
-                      child: const Text('Play Again'),
+                      onPressed: _isSyncing ? null : _syncScoreToCloud,
+                      icon: const Icon(Icons.cloud_upload),
+                      label: Text(
+                        _isSyncing
+                            ? 'Simulating sync...'
+                            : 'Simulate Score Sync',
+                      ),
+                    )
+                  else
+                    const Text(
+                      '✓ Sync Simulation Complete',
+                      style: TextStyle(
+                        color: Colors.green,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
-                  ],
-                ),
+                  const SizedBox(height: 16),
+                  TextButton(
+                    onPressed: _restart,
+                    child: const Text('Play Again'),
+                  ),
+                ],
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
