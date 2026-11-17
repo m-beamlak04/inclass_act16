@@ -1,29 +1,40 @@
-# In-Class Activity 15 – API-to-Cloud Trivia Showdown
+# ICA 16 – Class A Cloud Quiz
 
-## Overview
-This is a Flutter trivia app that uses the Open Trivia Database API to fetch five multiple-choice questions.
-
-## Features
-- Fetches five trivia questions from the API.
-- Displays four shuffled answer choices.
-- Shows correct answers in green and incorrect selections in red.
-- Tracks the player's score and displays the final result.
-- Allows the player to start another round.
-- Displays an error message when the API request fails.
-- Simulates syncing the final score.
+The app retrieves 10 easy General Knowledge questions from Open Trivia Database. Users sign in with Firebase Authentication, complete the quiz, review their answers, and submit their score to Cloud Firestore.
 
 ## Setup
-1. Open the project in IntelliJ or another Flutter-supported IDE.
-2. Run `flutter pub get` to install dependencies.
-3. Start an Android emulator.
-4. Run the app using `flutter run`.
 
-An internet connection is required to fetch new questions.
+1. Install Flutter and set up an Android emulator or device.
+2. Clone the repository and open the project.
+3. Install dependencies: `flutter pub get`
+4. Create a Firebase project and enable:
+    - Email/Password Authentication
+    - Cloud Firestore (Standard edition, Native mode)
+5. Create two test users in Firebase Authentication.
+6. Configure the Android application using FlutterFire CLI: `flutterfire configure`
+7. Publish the Firestore security rules from `firestore.rules` to the Firebase project.
+8. Run the application: `flutter run`
 
-## Testing
-I tested the app by loading questions, selecting answers, completing a five-question round, and checking the simulated score sync. I also tested the error handling by disabling the emulator's internet connection.
-I tested turning on airplane mode during an active round and was still able to finish the questions. However, starting another round without internet displayed a connection error.
-The screenshots, expected results, observed results, and critical-thinking answers are included in my testing evidence document.
+## Usage
 
-## Note About Score Sync
-The score sync is only a simulation provided in the starter code. It displays a confirmation message but does not actually send or save the score to an online server.
+1. Sign in using a Firebase test account.
+2. Answer the 10 multiple-choice questions.
+3. Review your score and answers.
+4. Tap `Submit to Cloud` to save and verify the attempt.
+5. Select `Play Again` to start a new round.
+
+An internet connection is required to retrieve questions and verify cloud submissions.
+
+## Tools & Services
+
+- Flutter / Dart
+- Open Trivia Database API
+- Firebase Authentication
+- Cloud Firestore
+
+## Notes
+
+- Quiz attempts are stored under `users/{uid}/attempts/{roundId}`.
+- Firestore transactions help prevent duplicate submissions.
+- Scores are verified through a server-only Firestore read.
+- Test account passwords are not included in the repository.
